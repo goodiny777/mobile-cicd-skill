@@ -1,7 +1,7 @@
 {
   "name": "mobile-cicd",
   "description": "Mobile release CI/CD, end to end: Xcode Cloud (iOS, managed signing, ci_scripts) + GitHub Actions (Android → Google Play / Firebase App Distribution). Detects the project, interviews the owner, generates pipelines, pushes, watches the first build and fixes from logs until green.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": { "name": "Mikhail Babozhko", "url": "https://github.com/goodiny777" },
   "homepage": "https://github.com/goodiny777/mobile-cicd-skill",
   "repository": "https://github.com/goodiny777/mobile-cicd-skill",

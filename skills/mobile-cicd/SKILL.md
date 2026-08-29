@@ -3,7 +3,7 @@ name: mobile-cicd
 description: Set up, migrate, or debug mobile release CI/CD end to end — detect the project (native iOS/Android, Flutter, React Native, KMP, which modules), interview the owner on what to deploy where (TestFlight/App Store via Xcode Cloud with ci_scripts and managed signing; Google Play and/or Firebase App Distribution via GitHub Actions), where secrets live, and what triggers a release (tag, branch, manual); then generate pipelines, commit, push, watch the first build, read failing logs, fix, and repeat until green. Use whenever the user mentions Xcode Cloud, TestFlight, ci_post_clone.sh, App Store or Play Store deployment, Firebase App Distribution, release tags, macOS runner costs, fastlane replacement, "our iOS build is expensive/slow/flaky", or asks to configure a mobile release workflow — even a bare "set up CI for my app". Also drives the App Store Connect console via Claude in Chrome and writes the project's release runbook.
 license: MIT
 metadata:
-  version: "1.0.0"
+  version: "1.0.1"
   author: goodiny777
   homepage: https://github.com/goodiny777/mobile-cicd-skill
 ---
@@ -18,7 +18,9 @@ This is an interactive, iterative job. You will ask questions, wait for the owne
 
 ## Phase 0 — Detect (always first, before any question)
 
-Run `scripts/detect_project.sh <repo-root>` and read every line. It reports: stack (`native-ios`, `native-android`, `flutter`, `react-native`, `kmp`, or `multi` when a repo holds separate iOS and Android modules), git submodules, where the Xcode project lives, shared schemes and their Archive config, signing style, CocoaPods/SPM state and `Podfile.lock` age, existing `ci_scripts/`, every GitHub workflow and whether any uses a macOS runner, and for Android: module dirs, `applicationId`, flavors, `signingConfigs` and where they read credentials from, `versionCode`/`versionName` sources, and whether a keystore or `key.properties` is tracked in git.
+First note which OS your shell is on (`uname -s`; Git Bash on Windows reports `MINGW64_NT…`). If it's Windows, or the user is on a Mac, skim `references/platform-notes.md` — it lists the PowerShell and macOS traps (no `&&`, no glob expansion for `git update-index`, `base64 -w0` missing on macOS) and which tasks need a Mac at all. Everything the skill *generates* runs on Apple's and GitHub's machines, so the OS only changes how you drive git locally.
+
+Run `bash scripts/detect_project.sh <repo-root>` and read every line. It reports: stack (`native-ios`, `native-android`, `flutter`, `react-native`, `kmp`, or `multi` when a repo holds separate iOS and Android modules), git submodules, where the Xcode project lives, shared schemes and their Archive config, signing style, CocoaPods/SPM state and `Podfile.lock` age, existing `ci_scripts/`, every GitHub workflow and whether any uses a macOS runner, and for Android: module dirs, `applicationId`, flavors, `signingConfigs` and where they read credentials from, `versionCode`/`versionName` sources, and whether a keystore or `key.properties` is tracked in git.
 
 Don't guess what the script can tell you. Most wrong advice here comes from assuming Flutter when it's RN, or CocoaPods when the project moved to SPM, or a single module when there are three.
 
@@ -41,7 +43,7 @@ Confirm the plan in five lines before generating anything.
 
 Produce the **secrets map**: name → where it lives → every other copy → required (build fails if unset) or optional (warn and continue). Template: `references/runbook.md` §3.
 
-Then guide the owner through entering them, with the exact console paths (`references/runbook.md` §3, `references/github-actions-play.md`, `references/firebase-app-distribution.md`). For the keystore: if none exists, give the `keytool` command and the `base64 -w0` line; the user runs both locally and pastes nothing into chat. For GitHub, verify with `gh secret list` (names only) that every required secret exists before you push. For Xcode Cloud, verify by reading the Environment tab (Chrome, Phase 4) or by asking the user to confirm the names render with asterisks.
+Then guide the owner through entering them, with the exact console paths (`references/runbook.md` §3, `references/github-actions-play.md`, `references/firebase-app-distribution.md`). For the keystore: if none exists, give the `keytool` command and the base64 one-liner for their OS (`platform-notes.md` §4); the user runs both locally and pastes nothing into chat. For GitHub, verify with `gh secret list` (names only) that every required secret exists before you push. For Xcode Cloud, verify by reading the Environment tab (Chrome, Phase 4) or by asking the user to confirm the names render with asterisks.
 
 Secure extraction in the pipelines is already encoded in the templates: secrets enter through `${{ secrets.X }}` into step-scoped `env`, never interpolated into `run:` strings; the keystore is decoded to a file that is scrubbed in an `if: always()` step; scripts log `KEY present (N chars) — value not logged`; a missing required key fails in the first seconds, before any billed minute.
 
@@ -68,9 +70,9 @@ Rules the templates encode — keep them:
 - **Log presence, not values.**
 - **`ARCHIVED`, not `DEPLOYED`** from `ci_post_xcodebuild.sh` — TestFlight delivery happens after it; the email post-action is the backstop.
 - **No double `pod install`** in Flutter.
-- **`100755` in the git index and LF endings** — `git update-index --chmod=+x <dir>/ci_scripts/*.sh`. This is the most common reason Apple silently ignores the scripts, and it's invisible on disk on Windows.
+- **`100755` in the git index and LF endings** — run `bash scripts/fix_exec_bits.sh` (or `scripts/fix_exec_bits.ps1` from PowerShell) after writing the scripts. Don't hand-type `git update-index --chmod=+x dir/*.sh`: PowerShell won't expand the glob and git silently does nothing. This is the most common reason Apple ignores `ci_scripts/`, and it's invisible on disk on Windows (`core.filemode=false`).
 
-Then run `scripts/check_ci_scripts.sh <repo-root>` and fix every FAIL before Phase 5.
+Then run `bash scripts/check_ci_scripts.sh <repo-root>` and fix every FAIL before Phase 5.
 
 ## Phase 4 — Console configuration (iOS)
 
@@ -86,7 +88,7 @@ For Android the console work is the Play service account + first manual AAB uplo
 2. Merge (with the user), then fire the trigger: push `android/vX.Y.Z` and/or `ios/vX.Y.Z` for a version that matches the project, or `gh workflow run` / Xcode Cloud manual start if that's the rule.
 3. **Android:** `scripts/watch_github_run.sh` wraps `gh run watch` and, on failure, prints `gh run view --log-failed` trimmed to the failing step. Read it, match against `references/troubleshooting.md`, fix, commit, retag (`vX.Y.Z-rc2` style is fine for iteration if the version guard allows it — or bump the offset only), push, watch again.
 4. **iOS:** Xcode Cloud logs are in App Store Connect → Xcode Cloud → Builds → the build → the failed action's log. Read them through Chrome (`get_page_text` on the log pane) or ask the user to paste the last ~80 lines of the failed step. `ci_post_clone.sh` failures are yours to fix in the script; Apple-step failures usually trace back to the console table or to signing.
-5. Expect **3–8 fix commits** on a first live run and say so up front, so nobody panics at failure #3. Stop and ask only when a fix needs something you can't do: a Mac (regenerating `Podfile.lock`, committing `Package.resolved`), a console value, or a Play/Firebase permission.
+5. Expect **3–8 fix commits** on a first live run and say so up front, so nobody panics at failure #3. Stop and ask only when a fix needs something you can't do: a Mac (regenerating `Podfile.lock`, committing `Package.resolved` — `platform-notes.md` §5 has the Windows/Linux workarounds), a console value, or a Play/Firebase permission.
 6. Green = the artifact is visible where it should be: the build in TestFlight ("Ready to Submit"), the release on the Play track, the release in Firebase App Distribution. A green job with no artifact is not green (troubleshooting F-14).
 
 Cap: if the same failure repeats after two fixes, stop, show the user the log and your hypothesis, and ask.
@@ -106,6 +108,7 @@ Write `docs/release/ci-runbook.md` from `references/runbook.md`: keep the stack 
 
 ## Files
 
+- `references/platform-notes.md` — Windows / macOS / Linux differences, PowerShell traps, base64 per OS, what needs a Mac.
 - `references/interview.md` — question bank, the three `on:` trigger blocks, secret-storage options.
 - `references/runbook.md` — the universal runbook (copy, trim, fill).
 - `references/xcode-cloud-console.md` — every console setting with rationale.
@@ -115,4 +118,4 @@ Write `docs/release/ci-runbook.md` from `references/runbook.md`: keep the stack 
 - `references/troubleshooting.md` — the failure catalogue.
 - `assets/xcode-cloud/{flutter,native,react-native,common}/` — `ci_scripts` templates.
 - `assets/github-actions/` — Android workflows (Flutter, Gradle) + `notify.sh` (Telegram/Slack).
-- `scripts/detect_project.sh`, `scripts/check_ci_scripts.sh`, `scripts/watch_github_run.sh`.
+- `scripts/detect_project.sh`, `scripts/check_ci_scripts.sh`, `scripts/fix_exec_bits.sh` (+ `.ps1`), `scripts/watch_github_run.sh`.

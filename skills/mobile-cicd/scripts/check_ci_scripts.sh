@@ -35,7 +35,7 @@ for d in $DIRS; do
     mode="$(git ls-files -s -- "$f" | awk '{print $1}')"
     if [ -z "$mode" ]; then fail "$name is not tracked by git (git add it)"
     elif [ "$mode" = "100755" ]; then pass "$name index mode 100755"
-    else fail "$name index mode is $mode — run: git update-index --chmod=+x $f"; fi
+    else fail "$name index mode is $mode — run: bash scripts/fix_exec_bits.sh  (PowerShell: scripts/fix_exec_bits.ps1; a hand-typed glob will NOT expand there)"; fi
 
     if [ -n "$mode" ]; then
       if git show ":$f" | grep -q $'\r'; then fail "$name has CRLF line endings in the index (set *.sh text eol=lf, re-add)"; else pass "$name LF endings"; fi

@@ -6,7 +6,7 @@
       "name": "mobile-cicd",
       "source": "./",
       "description": "Mobile release CI/CD end to end — Xcode Cloud for iOS, GitHub Actions for Android (Google Play / Firebase App Distribution), interview-driven, fixes the first build from logs until green.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "category": "devops",
       "keywords": ["ios", "android", "xcode-cloud", "github-actions", "testflight", "google-play", "flutter"]
     }

@@ -104,6 +104,7 @@ You lose the automatic push-watch-fix loop, but keep the interview, the template
 skills/mobile-cicd/
 ├── SKILL.md                         # the workflow (six phases)
 ├── references/
+│   ├── platform-notes.md            # Windows / macOS / Linux differences, what needs a Mac
 │   ├── interview.md                 # question bank, trigger blocks, secret-storage options
 │   ├── runbook.md                   # universal runbook to copy into the project
 │   ├── xcode-cloud-console.md       # every console setting, with the reason
@@ -118,6 +119,7 @@ skills/mobile-cicd/
 └── scripts/
     ├── detect_project.sh            # read-only project report
     ├── check_ci_scripts.sh          # pre-push harness (exit 1 on FAIL)
+    ├── fix_exec_bits.sh / .ps1      # set 100755 in the git index, any OS
     └── watch_github_run.sh          # gh run watch + focused failure log
 docs/mobile-cicd-runbook.md          # the runbook, standalone
 dist/mobile-cicd.skill               # packaged skill for Claude.ai / Claude Desktop upload
@@ -140,6 +142,7 @@ dist/mobile-cicd.skill               # packaged skill for Claude.ai / Claude Des
 
 ## Requirements
 
+- **Works from Windows, macOS and Linux.** The helper scripts are bash: on Windows they run under Git Bash (bundled with Git for Windows), which Claude Code uses by default; a PowerShell twin is provided where PowerShell behaves differently (`scripts/fix_exec_bits.ps1`). `skills/mobile-cicd/references/platform-notes.md` lists the OS-specific traps and which steps need a Mac (only the first-time Xcode Cloud workflow creation and CocoaPods/SPM lock regeneration).
 - The agent needs a shell, file tools and (for the push/watch loop) an authenticated `gh` CLI and `jq`.
 - Apple: an App Store Connect account with Admin/App Manager, the app record created, and a Mac with Xcode **once** to create the first Xcode Cloud workflow (later edits are web-only).
 - Google: Play Console admin to create the service account; a first manual AAB upload before API uploads work.

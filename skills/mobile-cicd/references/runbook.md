@@ -104,7 +104,7 @@ Path: **repository → Settings → Secrets and variables → Actions → New re
 
 | Secret | Purpose | How to produce |
 |---|---|---|
-| `ANDROID_KEYSTORE_BASE64` | upload keystore | `base64 -w0 upload-keystore.jks` on your machine; the workflow decodes it to a temp file |
+| `ANDROID_KEYSTORE_BASE64` | upload keystore | Linux/Git Bash: `base64 -w0 upload-keystore.jks`; macOS: `base64 -i upload-keystore.jks \| tr -d '\n'`; PowerShell: `[Convert]::ToBase64String([IO.File]::ReadAllBytes("upload-keystore.jks"))`. The workflow decodes it to a temp file and scrubs it. |
 | `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` | keystore credentials | as created with `keytool` |
 | `PLAY_SERVICE_ACCOUNT_JSON` | Play Developer API | Google Cloud → IAM → Service Accounts → Keys → JSON; then Play Console → Users and permissions → invite the service-account email → grant *Release to testing tracks* (and production if needed) on the app |
 | `<<FILL: ANALYTICS_API_KEY>>` | same key as iOS | copy of the Xcode Cloud value |
@@ -155,7 +155,7 @@ Apple runs, if present and executable: `ci_post_clone.sh` → (your Archive acti
 
 Two constraints that bite, both fixed at commit time and both checked by the harness in §7:
 
-- Scripts must be `100755` **in the git index** (`git update-index --chmod=+x ios/ci_scripts/*.sh`), not just on disk — matters on Windows and on any machine with `core.filemode=false`.
+- Scripts must be `100755` **in the git index**, not just on disk — matters on Windows and on any machine with `core.filemode=false`. Use the skill's `scripts/fix_exec_bits.sh` (or `.ps1`); a hand-typed `git update-index --chmod=+x dir/*.sh` silently does nothing in PowerShell because the glob is not expanded.
 - Scripts must have **LF** endings. Add to `.gitattributes`: `*.sh text eol=lf`.
 
 Apple does **not** wipe generated files between post-clone and archive (`Generated.xcconfig`, `Pods/`, `node_modules/` survive), so post-clone can do all preparation.

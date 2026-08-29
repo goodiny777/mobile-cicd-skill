@@ -61,7 +61,7 @@ The tag↔version guard must read the version from `GITHUB_REF_NAME` for tags, f
 
 Ask about existence and ownership, never values.
 
-- "Is there an upload keystore already? Where is it, and who has the password?" If none: give `keytool -genkey -v -keystore upload-keystore.jks -keyalg RSA -keysize 2048 -validity 10000 -alias upload`, tell them to keep it outside the repo and back it up, then `base64 -w0 upload-keystore.jks | pbcopy` (macOS) / `| clip` (Windows Git Bash) / `| xclip` for pasting into the GitHub secret.
+- "Is there an upload keystore already? Where is it, and who has the password?" If none: give `keytool -genkey -v -keystore upload-keystore.jks -keyalg RSA -keysize 2048 -validity 10000 -alias upload`, tell them to keep it outside the repo and back it up, then encode it for the GitHub secret with the one-liner for their OS in `platform-notes.md` §4 (`base64 -w0` is Linux/Git Bash only; macOS needs `base64 -i … | tr -d '\n'`; PowerShell uses `[Convert]::ToBase64String`).
 - "Is Play App Signing enabled?" (Play Console → Setup → App signing). If yes, the keystore is only the upload key — losing it is recoverable via Play support.
 - "Do you have a Play service account? A Firebase service account?" If not, point at the steps in the respective reference.
 - "Which app config keys must be baked into the build?" (analytics, ads, API base URL). Each becomes a `REQUIRED_KEYS` or `OPTIONAL_KEYS` entry; the same key needed by both platforms means **two copies**, note it.
