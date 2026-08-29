@@ -1,0 +1,172 @@
+# .github/workflows/release-android.yml — Flutter → Google Play (internal track)
+#
+# Triggered ONLY by android/vX.Y.Z tags. A bare vX.Y.Z tag triggers nothing (deliberate).
+# Runs on Linux: 1× minute multiplier. There must be NO macOS runner in this file.
+#
+# Secrets (repo → Settings → Secrets and variables → Actions):
+#   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+#   PLAY_SERVICE_ACCOUNT_JSON
+#   <REQUIRED_KEYS>  e.g. ANALYTICS_API_KEY  — same value as the Xcode Cloud env var (two copies; rotate both)
+#   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID and/or SLACK_WEBHOOK_URL (optional; see NOTIFY)
+#
+# Variables to edit below: FLUTTER_VERSION (keep equal to the Xcode Cloud env), VERSION_CODE_OFFSET,
+# REQUIRED_KEYS / OPTIONAL_KEYS, PACKAGE_NAME.
+
+name: Release Android
+
+# Trigger rule — keep the block(s) the owner chose (references/interview.md Q3):
+on:
+  push:
+    tags: ['android/v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (must match pubspec.yaml)'
+        required: true
+  # push:
+  #   branches: [release]
+  #   paths-ignore: ['docs/**', '**/*.md']
+
+concurrency:
+  group: release-android-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FLUTTER_VERSION: '3.47.1'
+  PACKAGE_NAME: 'com.example.app'          # <<FILL>>
+  VERSION_CODE_OFFSET: '100'               # <<FILL: above the highest versionCode Play has seen>>
+  REQUIRED_KEYS: 'ANALYTICS_API_KEY'       # <<FILL: space-separated>>
+  OPTIONAL_KEYS: 'PREMIUM_UNLOCKED FLAG_ADS_ENABLED'
+  APP_DISPLAY_NAME: 'Android'
+  NOTIFY: 'telegram'                       # telegram | slack | both | none — secrets: TELEGRAM_BOT_TOKEN+TELEGRAM_CHAT_ID and/or SLACK_WEBHOOK_URL
+  DEPLOY_PLAY: 'true'                      # Google Play upload step
+  PLAY_TRACK: 'internal'                   # internal | alpha | beta | production
+  DEPLOY_FIREBASE: 'false'                 # Firebase App Distribution step (references/firebase-app-distribution.md)
+  FIREBASE_GROUPS: 'qa'                    # comma-separated group aliases
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version guard (tag / manual input ↔ pubspec.yaml)
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          PUBSPEC_VERSION="$(sed -n 's/^version:[[:space:]]*\([0-9][0-9.]*\).*/\1/p' pubspec.yaml | head -1)"
+          case "$GITHUB_EVENT_NAME" in
+            push)
+              if [[ "$GITHUB_REF" == refs/tags/* ]]; then EXPECTED="${GITHUB_REF_NAME#android/v}"; else EXPECTED="$PUBSPEC_VERSION"; fi ;;
+            workflow_dispatch) EXPECTED="$INPUT_VERSION" ;;
+            *) EXPECTED="$PUBSPEC_VERSION" ;;
+          esac
+          echo "expected=$EXPECTED pubspec=$PUBSPEC_VERSION"
+          [ "$EXPECTED" = "$PUBSPEC_VERSION" ] || { echo "::error::requested version $EXPECTED does not match pubspec.yaml $PUBSPEC_VERSION"; exit 1; }
+          echo "APP_VERSION=$PUBSPEC_VERSION" >> "$GITHUB_ENV"
+
+      - name: Required keys gate + synthesize .env
+        env:
+          # expose every key the gate may need; add lines for each entry in REQUIRED_KEYS/OPTIONAL_KEYS
+          ANALYTICS_API_KEY: ${{ secrets.ANALYTICS_API_KEY }}
+          PREMIUM_UNLOCKED: 'false'
+          FLAG_ADS_ENABLED: 'false'
+        run: |
+          : > .env
+          for key in $REQUIRED_KEYS; do
+            val="${!key:-}"
+            [ -n "$val" ] || { echo "::error::required secret $key is unset — add it under Settings → Secrets and variables → Actions"; exit 1; }
+            echo "$key present (${#val} characters) — value not logged"
+            printf '%s=%s\n' "$key" "$val" >> .env
+          done
+          for key in $OPTIONAL_KEYS; do
+            val="${!key:-}"
+            [ -n "$val" ] && printf '%s=%s\n' "$key" "$val" >> .env || echo "optional $key not set"
+          done
+
+      - name: Notify STARTED
+        if: env.NOTIFY != 'none'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TEXT: "[${{ env.APP_DISPLAY_NAME }}] STARTED — v${{ env.APP_VERSION }} | ${{ github.ref_name }} | run ${{ github.run_number }}"
+        run: bash .github/scripts/notify.sh
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Decode upload keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          [ -n "$ANDROID_KEYSTORE_BASE64" ] || { echo "::error::ANDROID_KEYSTORE_BASE64 unset"; exit 1; }
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/upload-keystore.jks
+          cat > android/key.properties <<EOF
+          storeFile=upload-keystore.jks
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          EOF
+          echo "keystore decoded ($(stat -c%s android/upload-keystore.jks) bytes)"
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: Build AAB
+        run: |
+          BUILD_NUMBER=$(( GITHUB_RUN_NUMBER + VERSION_CODE_OFFSET ))
+          echo "versionCode=$BUILD_NUMBER"
+          flutter build appbundle --release \
+            --build-name="$APP_VERSION" \
+            --build-number="$BUILD_NUMBER" \
+            --dart-define-from-file=.env
+
+      - name: Upload to Google Play
+        if: env.DEPLOY_PLAY == 'true'
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: ${{ env.PACKAGE_NAME }}
+          releaseFiles: build/app/outputs/bundle/release/app-release.aab
+          track: ${{ env.PLAY_TRACK }}
+          status: completed        # use 'draft' for the very first upload of a new app
+          mappingFile: build/app/outputs/mapping/release/mapping.txt
+
+      - name: Build APK for Firebase App Distribution
+        if: env.DEPLOY_FIREBASE == 'true'
+        run: |
+          BUILD_NUMBER=$(( GITHUB_RUN_NUMBER + VERSION_CODE_OFFSET ))
+          flutter build apk --release --build-name="$APP_VERSION" --build-number="$BUILD_NUMBER" --dart-define-from-file=.env
+
+      - name: Firebase App Distribution
+        if: env.DEPLOY_FIREBASE == 'true'
+        uses: wzieba/Firebase-Distribution-Github-Action@v1
+        with:
+          appId: ${{ secrets.FIREBASE_ANDROID_APP_ID }}
+          serviceCredentialsFileContent: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          groups: ${{ env.FIREBASE_GROUPS }}
+          file: build/app/outputs/flutter-apk/app-release.apk
+          releaseNotes: "${{ github.ref_name }} — ${{ github.sha }}"
+
+      - name: Notify result
+        if: always() && env.NOTIFY != 'none'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TEXT: "[${{ env.APP_DISPLAY_NAME }}] ${{ job.status == 'success' && 'DEPLOYED' || 'FAILED' }} — v${{ env.APP_VERSION }} | run ${{ github.run_number }} | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        run: bash .github/scripts/notify.sh
+      - name: Scrub keystore
+        if: always()
+        run: rm -f android/upload-keystore.jks android/key.properties .env

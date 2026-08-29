@@ -1,0 +1,3 @@
+# Add to .gitattributes at the repo root.
+# Guarantees LF endings for CI scripts regardless of the authoring OS (Xcode Cloud runs them with bash; CRLF breaks the shebang).
+*.sh text eol=lf

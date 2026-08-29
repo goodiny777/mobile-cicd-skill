@@ -1,0 +1,14 @@
+{
+  "name": "goodiny777-skills",
+  "owner": { "name": "Mikhail Babozhko", "url": "https://github.com/goodiny777" },
+  "plugins": [
+    {
+      "name": "mobile-cicd",
+      "source": "./",
+      "description": "Mobile release CI/CD end to end — Xcode Cloud for iOS, GitHub Actions for Android (Google Play / Firebase App Distribution), interview-driven, fixes the first build from logs until green.",
+      "version": "1.0.0",
+      "category": "devops",
+      "keywords": ["ios", "android", "xcode-cloud", "github-actions", "testflight", "google-play", "flutter"]
+    }
+  ]
+}

@@ -1,0 +1,147 @@
+# .github/workflows/release-android.yml — Gradle project (native Android, React Native, KMP) → Google Play
+#
+# Triggered ONLY by android/vX.Y.Z tags. Linux runner only.
+# Secrets: ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD,
+#          PLAY_SERVICE_ACCOUNT_JSON, <REQUIRED_KEYS>, TELEGRAM_* and/or SLACK_WEBHOOK_URL (optional)
+#
+# The build reads signing from android/key.properties (or ~/.gradle/gradle.properties) and
+# versionCode/versionName from -P properties — wire these into build.gradle(.kts) once:
+#   versionCode = (project.findProperty("versionCode") as String?)?.toInt() ?: 1
+#   versionName = project.findProperty("versionName") as String? ?: "0.0.0"
+
+name: Release Android
+
+# Trigger rule — keep the block(s) the owner chose (references/interview.md Q3):
+on:
+  push:
+    tags: ['android/v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (must match the project version)'
+        required: true
+  # push:
+  #   branches: [release]
+  #   paths-ignore: ['docs/**', '**/*.md']
+
+concurrency:
+  group: release-android-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  ANDROID_DIR: 'android'                   # <<FILL: '.' for a pure Android repo, 'androidApp' for KMP>>
+  PACKAGE_NAME: 'com.example.app'          # <<FILL>>
+  VERSION_CODE_OFFSET: '100'               # <<FILL>>
+  REQUIRED_KEYS: 'ANALYTICS_API_KEY'       # <<FILL>>
+  NODE_VERSION: '20'                       # React Native only
+  APP_DISPLAY_NAME: 'Android'
+  NOTIFY: 'telegram'                       # telegram | slack | both | none — secrets: TELEGRAM_BOT_TOKEN+TELEGRAM_CHAT_ID and/or SLACK_WEBHOOK_URL
+  DEPLOY_PLAY: 'true'
+  PLAY_TRACK: 'internal'
+  DEPLOY_FIREBASE: 'false'
+  FIREBASE_GROUPS: 'qa'
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version guard (tag / manual input ↔ project version)
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          # Pick ONE source of truth and delete the others:
+          PROJECT_VERSION="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([0-9][0-9.]*\)".*/\1/p' package.json 2>/dev/null | head -1)"   # React Native
+          # PROJECT_VERSION="$(sed -n 's/^versionName=\(.*\)/\1/p' gradle.properties)"                                                   # Gradle property
+          case "$GITHUB_EVENT_NAME" in
+            push) if [[ "$GITHUB_REF" == refs/tags/* ]]; then EXPECTED="${GITHUB_REF_NAME#android/v}"; else EXPECTED="$PROJECT_VERSION"; fi ;;
+            workflow_dispatch) EXPECTED="$INPUT_VERSION" ;;
+            *) EXPECTED="$PROJECT_VERSION" ;;
+          esac
+          [ "$EXPECTED" = "$PROJECT_VERSION" ] || { echo "::error::requested $EXPECTED ≠ project version $PROJECT_VERSION"; exit 1; }
+          echo "APP_VERSION=$PROJECT_VERSION" >> "$GITHUB_ENV"
+
+      - name: Required keys gate + .env
+        env:
+          ANALYTICS_API_KEY: ${{ secrets.ANALYTICS_API_KEY }}
+        run: |
+          : > .env
+          for key in $REQUIRED_KEYS; do
+            val="${!key:-}"
+            [ -n "$val" ] || { echo "::error::required secret $key unset"; exit 1; }
+            echo "$key present (${#val} characters) — value not logged"
+            printf '%s=%s\n' "$key" "$val" >> .env
+          done
+
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # React Native only — delete for native/KMP
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ env.NODE_VERSION }}', cache: npm }
+      - name: npm ci (React Native)
+        if: hashFiles('package.json') != ''
+        run: npm ci
+
+      - name: Decode upload keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$ANDROID_DIR/upload-keystore.jks"
+          cat > "$ANDROID_DIR/key.properties" <<EOF
+          storeFile=upload-keystore.jks
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          EOF
+
+      - name: Build AAB
+        working-directory: ${{ env.ANDROID_DIR }}
+        run: |
+          BUILD_NUMBER=$(( GITHUB_RUN_NUMBER + VERSION_CODE_OFFSET ))
+          ./gradlew bundleRelease -PversionCode="$BUILD_NUMBER" -PversionName="$APP_VERSION" --no-daemon
+
+      - name: Upload to Google Play
+        if: env.DEPLOY_PLAY == 'true'
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: ${{ env.PACKAGE_NAME }}
+          releaseFiles: ${{ env.ANDROID_DIR }}/app/build/outputs/bundle/release/app-release.aab
+          track: ${{ env.PLAY_TRACK }}
+          status: completed
+          mappingFile: ${{ env.ANDROID_DIR }}/app/build/outputs/mapping/release/mapping.txt
+
+      - name: Build APK for Firebase App Distribution
+        if: env.DEPLOY_FIREBASE == 'true'
+        working-directory: ${{ env.ANDROID_DIR }}
+        run: ./gradlew assembleRelease -PversionCode="$(( GITHUB_RUN_NUMBER + VERSION_CODE_OFFSET ))" -PversionName="$APP_VERSION" --no-daemon
+
+      - name: Firebase App Distribution
+        if: env.DEPLOY_FIREBASE == 'true'
+        uses: wzieba/Firebase-Distribution-Github-Action@v1
+        with:
+          appId: ${{ secrets.FIREBASE_ANDROID_APP_ID }}
+          serviceCredentialsFileContent: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          groups: ${{ env.FIREBASE_GROUPS }}
+          file: ${{ env.ANDROID_DIR }}/app/build/outputs/apk/release/app-release.apk
+          releaseNotes: "${{ github.ref_name }} — ${{ github.sha }}"
+
+      - name: Notify result
+        if: always() && env.NOTIFY != 'none'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TEXT: "[${{ env.APP_DISPLAY_NAME }}] ${{ job.status == 'success' && 'DEPLOYED' || 'FAILED' }} — v${{ env.APP_VERSION }} | run ${{ github.run_number }} | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        run: bash .github/scripts/notify.sh
+      - name: Scrub keystore
+        if: always()
+        run: rm -f "$ANDROID_DIR/upload-keystore.jks" "$ANDROID_DIR/key.properties" .env
